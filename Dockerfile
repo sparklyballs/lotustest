@@ -1,43 +1,73 @@
-ARG UBUNTU_VER="focal"
-FROM ubuntu:${UBUNTU_VER}
+FROM python:3.9 AS lotus_build
+
+# build arguments
+ARG DEBIAN_FRONTEND=noninteractive 
+ARG RELEASE
+
+# install build dependencies
+RUN \
+	apt-get update \
+	&& apt-get install \
+	--no-install-recommends -y \
+		ca-certificates \
+		curl \
+		jq \
+		lsb-release \
+		sudo
+
+# set workdir
+WORKDIR /lotus-blockchain
+
+# set shell
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# fetch source
+RUN \
+	if [ -z ${RELEASE+x} ]; then \
+	RELEASE=$(curl -u "${SECRETUSER}:${SECRETPASS}" -sX GET "https://api.github.com/repos/gowke/lotus-blockchain/commits/main" \
+	| jq -r ".sha"); \
+	RELEASE="${RELEASE:0:7}"; \
+	fi \
+	&& git clone https://github.com/gowke/lotus-blockchain.git . \
+	&& git checkout "${RELEASE}" \
+	&& git submodule update --init mozilla-ca \
+	&& /bin/sh ./install.sh
+
+FROM python:3.9-slim
 
 # build arguments
 ARG DEBIAN_FRONTEND=noninteractive
-ARG RELEASE
 
 # environment variables
 ENV \
-	farmer_address="null" \
+        LOTUS_ROOT=/root/.lotus/mainnet \
+        farmer_address= \
+        farmer_port= \
+        keys="generate" \
+        log_level="INFO" \
+        log_to_file="true" \
+        outbound_peer_count="20" \
+        peer_count="20" \
+        plots_dir="/plots" \
+        service="farmer" \
+        testnet="false" \
+        TZ="UTC" \
+        upnp="true"
+
+# legacy options
+ENV \
 	farmer="false" \
-	farmer_port="null" \
-	full_node_port="null" \
-	harvester="false" \
-	keys="generate" \
-	log_level="INFO" \
-	outbound_peer_count="20" \
-	peer_count="20" \
-	plots_dir="/plots" \
-	testnet="false" \
-	TZ="UTC"
+	harvester="false"
+
+# set workdir
+WORKDIR /lotus-blockchain
 
 # install dependencies
 RUN \
 	apt-get update \
-	&& apt-get install -y \
-	--no-install-recommends \
-		acl \
-		bc \
-		ca-certificates \
-		curl \
-		git \
-		jq \
-		lsb-release \
-		openssl \
-		python3 \
-		sudo \
-		tar \
+	&& apt-get install \
+	--no-install-recommends -y \
 		tzdata \
-		unzip \
 	\
 # set timezone
 	\
@@ -52,42 +82,16 @@ RUN \
 		/var/lib/apt/lists/* \
 		/var/tmp/*
 
-# set workdir for build stage
-WORKDIR /lotus-blockchain
-
-# set shell
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-# build package
-RUN \
-	if [ -z ${RELEASE+x} ]; then \
-	RELEASE=$(curl -u "${SECRETUSER}:${SECRETPASS}" -sX GET "https://api.github.com/repos/gowke/lotus-blockchain/commits/main" \
-	| jq -r ".sha"); \
-	RELEASE="${RELEASE:0:7}"; \
-	fi \
-	&& git clone https://github.com/gowke/lotus-blockchain.git \
-		/lotus-blockchain \		
-	&& git checkout "${RELEASE}" \
-	&& git submodule update --init mozilla-ca \
-	&& sh install.sh \
-		\
-# cleanup
-	\
-	&& rm -rf \
-		/root/.cache \
-		/tmp/* \
-		/var/lib/apt/lists/* \
-		/var/tmp/*
-
 # set additional runtime environment variables
 ENV \
-	PATH=/lotus-blockchain/venv/bin:$PATH \
-	CONFIG_ROOT=/root/.lotus/mainnet
+	PATH=/lotus-blockchain/venv/bin:$PATH
+
+# copy build files
+COPY --from=lotus_build /lotus-blockchain /lotus-blockchain
 
 # copy local files
 COPY docker-*.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-*.sh
 
-# entrypoint
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["docker-start.sh"]
